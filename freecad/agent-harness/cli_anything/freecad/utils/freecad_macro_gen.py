@@ -179,10 +179,29 @@ def _gen_parts(project: dict) -> List[str]:
     return lines
 
 
+def _boolean_specs(project: dict) -> List[Dict[str, str]]:
+    """Return normalized boolean operations from both supported state schemas."""
+    specs = [dict(op) for op in project.get("boolean_ops", [])]
+    for part in project.get("parts", []):
+        op_type = str(part.get("type", "")).lower()
+        if op_type not in {"cut", "fuse", "common"}:
+            continue
+        params = part.get("params", {})
+        base = _part_by_id(project, params.get("base_id"))
+        tool = _part_by_id(project, params.get("tool_id"))
+        if base and tool:
+            specs.append({
+                "type": op_type,
+                "name": part.get("name", f"BoolOp_{op_type}"),
+                "base": base.get("name", ""),
+                "tool": tool.get("name", ""),
+            })
+    return specs
+
+
 def _gen_boolean_ops(project: dict) -> List[str]:
     """Generate boolean operations (Cut, Fuse, Common)."""
     lines: List[str] = []
-    boolean_ops = project.get("boolean_ops", [])
 
     # Map user-friendly names to FreeCAD object types
     op_type_map = {
@@ -195,7 +214,7 @@ def _gen_boolean_ops(project: dict) -> List[str]:
         "intersection": "Part::Common",
     }
 
-    for op in boolean_ops:
+    for op in _boolean_specs(project):
         op_type = op.get("type", "fuse").lower()
         name = _safe_name(op.get("name", f"BoolOp_{op_type}"))
         base_name = _safe_name(op.get("base", ""))
@@ -537,12 +556,38 @@ def _gen_export(
     lines.append("doc.recompute()")
     lines.append("")
 
-    # Collect all visible shape objects for export
-    lines.append("# Collect all shape objects for export")
+    # Export only terminal boolean results. Including their operands would
+    # restore material that the boolean operation removed.
+    boolean_specs = _boolean_specs(project)
+    referenced_names = {
+        _safe_name(op.get(key, ""))
+        for op in boolean_specs
+        for key in ("base", "tool")
+    }
+    export_names = [
+        _safe_name(part.get("name", ""))
+        for part in project.get("parts", [])
+        if part.get("visible", True)
+        and str(part.get("type", "")).lower() not in {"cut", "fuse", "common"}
+        and _safe_name(part.get("name", "")) not in referenced_names
+    ] + [
+        _safe_name(op.get("name", ""))
+        for op in boolean_specs
+        if _safe_name(op.get("name", "")) not in referenced_names
+    ]
+
+    lines.append("# Collect shape objects for export")
     lines.append("export_objects = []")
-    lines.append("for obj in doc.Objects:")
-    lines.append("    if hasattr(obj, 'Shape') and obj.Shape.isValid():")
-    lines.append("        export_objects.append(obj)")
+    if export_names:
+        lines.append(f"export_names = {export_names!r}")
+        lines.append("for name in export_names:")
+        lines.append("    obj = doc.getObject(name)")
+        lines.append("    if obj is not None and hasattr(obj, 'Shape') and obj.Shape.isValid():")
+        lines.append("        export_objects.append(obj)")
+    else:
+        lines.append("for obj in doc.Objects:")
+        lines.append("    if hasattr(obj, 'Shape') and obj.Shape.isValid():")
+        lines.append("        export_objects.append(obj)")
     lines.append("")
 
     fmt = export_format.lower()
@@ -613,9 +658,9 @@ def generate_macro(
     sections: List[List[str]] = [
         _gen_header(),
         _gen_parts(project),
+        _gen_placements(project),
         _gen_boolean_ops(project),
         _gen_bodies(project),
-        _gen_placements(project),
         _gen_export(project, output_path, export_format),
     ]
 

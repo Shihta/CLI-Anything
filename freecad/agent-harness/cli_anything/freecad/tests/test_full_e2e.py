@@ -325,6 +325,19 @@ class TestIntermediateFiles:
 
         print(f"\n  Macro: {macro_path} ({len(macro):,} chars, {macro.count(chr(10))} lines)")
 
+    def test_macro_exports_terminal_boolean_result(self, tmp_path):
+        """CLI boolean state must render and export only the cut result."""
+        proj = create_document(name="BooleanMacroTest")
+        add_part(proj, "box", name="Base", position=[0, 0, 10])
+        add_part(proj, "cylinder", name="Tool", position=[0, 0, 10])
+        boolean_op(proj, "cut", 0, 1, name="CutResult")
+
+        macro = generate_macro(proj, str(tmp_path / "cut.step"))
+
+        assert "Part::Cut" in macro
+        assert "export_names = ['CutResult']" in macro
+        assert macro.index("obj_Base.Placement") < macro.index("Part::Cut")
+
     def test_macro_generation_body_primitives_and_patterns(self, tmp_path):
         """Generate a macro containing body primitive placements and pattern features."""
         proj = create_document(name="MacroBodyTower")
